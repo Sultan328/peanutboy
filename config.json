@@ -1,0 +1,13 @@
+{
+  "minecraft": {
+    "host": "peanut.mcsh.io",
+    "port": 25565,
+    "username": "PeanutBot",
+    "auth": "offline"
+  },
+  "web": {
+    "port": 3000,
+    "token": "peanut-a7f3k9x2q8w5m1z6v4b0n3",
+    "allowedOrigins": []
+  }
+}
