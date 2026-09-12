@@ -48,7 +48,7 @@ function addMessage(message) {
     return item;
 }
 
-// Deduplication — avoid showing the same message twice
+// Deduplication
 const recentMessages = new Set();
 function alreadySeen(key) {
     if (recentMessages.has(key)) return true;
@@ -58,31 +58,39 @@ function alreadySeen(key) {
     return false;
 }
 
-// Try to extract player name + message from a formatted chat line
-// Handles formats like:
-//   "Seeqako » yo"
-//   "[Not Secure] OWNER Seeqako ▶ yo"
-//   "Seeqako: yo"
-//   "<Seeqako> yo"
+// Parse player messages from your server's chat format:
+//   [Not Secure] OWNER Seeqako ▶ yo
+//   [Not Secure] PLAYER PeanutBot ▶ wsg
+//   Also handles simpler formats as fallback.
 function parsePlayerMessage(raw, botName) {
     if (!raw) return null;
+
     // Strip Minecraft color codes
     let text = raw.replace(/§[0-9a-fk-or]/gi, '').trim();
 
-    // Skip own messages
-    if (text.includes(botName)) return null;
+    // Skip messages from the bot itself
+    if (text.includes(botName + ' ') || text.endsWith(botName)) return null;
+    if (text.includes('PeanutLogin')) return null;
 
-    // Common patterns
     const patterns = [
-        /^(?:\[.*?\]\s*)?(?:\w+\s+)?([A-Za-z0-9_]{3,16})\s*[»▶:>]\s*(.+)$/,
+        // [Not Secure] OWNER Seeqako ▶ yo
+        /(?:\[[^\]]*\]\s*)?(?:OWNER|ADMIN|MOD|HELPER|VIP|MVP|PRIME|PLAYER|MEMBER|DEFAULT)\s+([A-Za-z0-9_]{3,16})\s*[▶»>:]\s*(.+)$/i,
+        // [Not Secure] Seeqako ▶ yo (no rank)
+        /(?:\[[^\]]*\]\s*)?([A-Za-z0-9_]{3,16})\s*[▶»>]\s*(.+)$/,
+        // <Seeqako> yo
         /^<([A-Za-z0-9_]{3,16})>\s*(.+)$/,
-        /^([A-Za-z0-9_]{3,16})\s*[»▶:>]\s*(.+)$/
+        // Seeqako: yo
+        /^([A-Za-z0-9_]{3,16})\s*:\s*(.+)$/
     ];
 
     for (const p of patterns) {
         const m = text.match(p);
         if (m) {
-            return { username: m[1], text: m[2].trim() };
+            const username = m[1];
+            const msg = m[2].trim();
+            // Skip bot's own messages
+            if (username.toLowerCase() === botName.toLowerCase()) return null;
+            return { username, text: msg };
         }
     }
     return null;
@@ -119,7 +127,7 @@ function connect() {
     current.on('playerJoined', players);
     current.on('playerLeft', players);
 
-    // ---- Standard player chat event ----
+    // Standard chat event (vanilla format)
     current.on('chat', (username, text) => {
         if (bot !== current) return;
         if (username === current.username) return;
@@ -128,7 +136,7 @@ function connect() {
         addMessage({ kind: 'player', username, text });
     });
 
-    // ---- Fallback: raw message event (catches chat from plugins that reformat) ----
+    // Raw message event — catches formatted chat from SKChat, SKMsg, TAB, etc.
     current.on('message', (jsonMsg, position) => {
         if (bot !== current) return;
         const raw = jsonMsg.toString();
