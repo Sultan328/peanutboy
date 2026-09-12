@@ -30,7 +30,6 @@ let state = {
 };
 const history = [];
 
-// Commands erlaubt vom Web-Chat
 const allowedCommands = [
     '/list', '/tps', '/spawn', '/help', '/ping',
     '/homes', '/home', '/sethome', '/delhome',
@@ -40,12 +39,53 @@ const allowedCommands = [
 ];
 
 function publish(patch) { state = { ...state, ...patch }; io.emit('state', state); }
+
 function addMessage(message) {
     const item = { ...message, id: crypto.randomUUID(), time: new Date().toISOString() };
     history.push(item);
     if (history.length > 200) history.shift();
     io.emit('message', item);
     return item;
+}
+
+// Deduplication — avoid showing the same message twice
+const recentMessages = new Set();
+function alreadySeen(key) {
+    if (recentMessages.has(key)) return true;
+    recentMessages.add(key);
+    if (recentMessages.size > 500) recentMessages.clear();
+    setTimeout(() => recentMessages.delete(key), 3000);
+    return false;
+}
+
+// Try to extract player name + message from a formatted chat line
+// Handles formats like:
+//   "Seeqako » yo"
+//   "[Not Secure] OWNER Seeqako ▶ yo"
+//   "Seeqako: yo"
+//   "<Seeqako> yo"
+function parsePlayerMessage(raw, botName) {
+    if (!raw) return null;
+    // Strip Minecraft color codes
+    let text = raw.replace(/§[0-9a-fk-or]/gi, '').trim();
+
+    // Skip own messages
+    if (text.includes(botName)) return null;
+
+    // Common patterns
+    const patterns = [
+        /^(?:\[.*?\]\s*)?(?:\w+\s+)?([A-Za-z0-9_]{3,16})\s*[»▶:>]\s*(.+)$/,
+        /^<([A-Za-z0-9_]{3,16})>\s*(.+)$/,
+        /^([A-Za-z0-9_]{3,16})\s*[»▶:>]\s*(.+)$/
+    ];
+
+    for (const p of patterns) {
+        const m = text.match(p);
+        if (m) {
+            return { username: m[1], text: m[2].trim() };
+        }
+    }
+    return null;
 }
 
 function connect() {
@@ -79,8 +119,24 @@ function connect() {
     current.on('playerJoined', players);
     current.on('playerLeft', players);
 
+    // ---- Standard player chat event ----
     current.on('chat', (username, text) => {
-        if (bot === current && username !== current.username) addMessage({ kind: 'player', username, text });
+        if (bot !== current) return;
+        if (username === current.username) return;
+        const key = `chat:${username}:${text}`;
+        if (alreadySeen(key)) return;
+        addMessage({ kind: 'player', username, text });
+    });
+
+    // ---- Fallback: raw message event (catches chat from plugins that reformat) ----
+    current.on('message', (jsonMsg, position) => {
+        if (bot !== current) return;
+        const raw = jsonMsg.toString();
+        const parsed = parsePlayerMessage(raw, current.username);
+        if (!parsed) return;
+        const key = `msg:${parsed.username}:${parsed.text}`;
+        if (alreadySeen(key)) return;
+        addMessage({ kind: 'player', username: parsed.username, text: parsed.text });
     });
 
     current.on('kicked', reason => {
